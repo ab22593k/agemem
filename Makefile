@@ -1,30 +1,32 @@
-.PHONY: build test test-unit test-integration run clean weaviate-up weaviate-down
+.PHONY: test test-unit test-integration run clean weaviate-up weaviate-down
 
-# Build the MCP server binary
-build:
-	go build -o agemem-server
-
-# Run all tests (unit only by default)
+# Run Python tests
 test: test-unit
 
-# Run unit tests only (no external dependencies)
+# Run STM unit tests (no external dependencies)
 test-unit:
-	go test -v ./internal/memory/... -run 'TestSTM'
+	PYTHONPATH=/home/abdelwahab/azul/python/agemem uv run pytest tests/test_stm.py -v
 
-# Run integration tests (requires Weaviate running)
+# Run LTM integration tests (requires Weaviate running)
 test-integration: weaviate-up
 	@echo "Waiting for Weaviate to be ready..."
 	@sleep 5
-	go test -v -tags=integration ./internal/memory/...
+	uv run pytest tests/ltm.py -v
+	docker-compose down
 
-# Run the MCP server
-run: build
-	./agemem-server
+# Run all tests
+test-all: test-unit test-integration
+
+# Run MCP server
+run:
+	uv run python main.py
 
 # Clean build artifacts
 clean:
-	rm -f agemem-server
-	rm -f ltm_store.json
+	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name .pytest_cache -exec rm -rf {} + 2>/dev/null || true
+	find . -type f -name "*.pyc" -delete 2>/dev/null || true
+	rm -rf .venv
 
 # Start Weaviate via Docker Compose
 weaviate-up:
@@ -33,10 +35,3 @@ weaviate-up:
 # Stop Weaviate
 weaviate-down:
 	docker-compose down
-
-# Full test cycle: start weaviate, run all tests, stop weaviate
-test-all: weaviate-up
-	@echo "Waiting for Weaviate to be ready..."
-	@sleep 5
-	go test -v ./internal/memory/... || true
-	go test -v -tags=integration ./internal/memory/... || true
