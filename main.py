@@ -9,7 +9,7 @@ management for LLM agents, implementing Agentic Memory framework.
 import json
 import os
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Literal, Optional, Union
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import ToolAnnotations
@@ -133,6 +133,18 @@ class RetrieveMemoryInput(BaseModel):
     min_quality: Optional[float] = Field(
         default=0, description="Minimum quality score to include (0-1)", ge=0, le=1
     )
+    search_type: Optional[Literal["vector", "keyword"]] = Field(
+        default=None,
+        description="Type of search. 'vector' for semantic similarity"
+        ", 'keyword' for BM25. Defaults to vector if enabled on server.",
+    )
+    min_similarity: Optional[float] = Field(
+        default=None,
+        description="Minimum similarity score for vector search (0-1)."
+        "Higher is more strict.",
+        ge=0,
+        le=1,
+    )
 
 
 class RateMemoryInput(BaseModel):
@@ -159,6 +171,10 @@ class SummarizeContextInput(BaseModel):
     aggressive: Optional[bool] = Field(
         default=False, description="If true, use more aggressive compression"
     )
+    span: Optional[Union[str, int]] = Field(
+        default=None,
+        description="Span to summarize. 'all' or number of last lines/messages.",
+    )
 
 
 class FilterContextInput(BaseModel):
@@ -171,13 +187,25 @@ class FilterContextInput(BaseModel):
     content: str = Field(..., description="The text to filter", min_length=1)
     keywords: str = Field(
         ...,
-        description="Keywords to keep (e.g., 'important,urgent,deadline')",
+        description=(
+            "Keywords to keep (for keyword filter) or natural language "
+            "description of what to keep (for semantic filter)."
+        ),
     )
     keep_context: Optional[int] = Field(
         default=0,
-        description="Number of surrounding lines to keep (default 0)",
+        description=(
+            "Number of surrounding lines to keep (only for keyword filter, default 0)"
+        ),
         ge=0,
         le=10,
+    )
+    semantic: Optional[bool] = Field(
+        default=True,
+        description=(
+            "If True (default), uses LLM for semantic filtering. "
+            "If False, uses exact keyword matching."
+        ),
     )
 
 
@@ -341,6 +369,8 @@ async def retrieve_memory(params: RetrieveMemoryInput, ctx: Context) -> str:
             - session_id (Optional[str]): Filter by session ID
             - user_id (Optional[str]): Filter by user ID
             - min_quality (Optional[float]): Minimum quality score to include (0-1)
+            - search_type (Optional[str]): 'vector' or 'keyword'
+            - min_similarity (Optional[float]): Min similarity for vector search
 
     Returns:
         str: Formatted list of matching memories
@@ -359,6 +389,8 @@ async def retrieve_memory(params: RetrieveMemoryInput, ctx: Context) -> str:
             user_id=params.user_id,
             min_quality=params.min_quality,
             update_usage=True,
+            search_type=params.search_type,
+            min_similarity=params.min_similarity,
         )
 
         if not results:
@@ -478,22 +510,19 @@ async def summarize_context(params: SummarizeContextInput, ctx: Context) -> str:
         params (SummarizeContextInput): Validated input parameters containing:
             - content (str): The text to summarize
             - aggressive (Optional[bool]): If true, use more aggressive compression
+            - span (Optional[str|int]): 'all' or number of last lines/messages
 
     Returns:
         str: Summarized text with compression statistics (original tokens → new tokens)
-
-    Examples:
-        - Use when: "This context is getting long, compress it"
-        - Use when: "Summarize this conversation" -> content="[long text]"
-        - Use when:
-            "Aggressive compression needed" -> content="[long text]", aggressive=True
 
     Error Handling:
         - Returns summarized text with compression statistics
     """
     stm = ctx.request_context.lifespan_context["stm"]
 
-    summary = await stm.summary(params.content, aggressive=params.aggressive)
+    summary = await stm.summary(
+        params.content, aggressive=params.aggressive, span=params.span
+    )
 
     original_tokens = stm.estimate_tokens(params.content)
     new_tokens = stm.estimate_tokens(summary)
@@ -508,7 +537,7 @@ async def summarize_context(params: SummarizeContextInput, ctx: Context) -> str:
 @mcp.tool(
     name="filter_context",
     annotations=ToolAnnotations(
-        title="Filter Context by Keywords",
+        title="Filter Context by Criteria",
         readOnlyHint=True,
         destructiveHint=False,
         idempotentHint=True,
@@ -517,34 +546,29 @@ async def summarize_context(params: SummarizeContextInput, ctx: Context) -> str:
 )
 async def filter_context(params: FilterContextInput, ctx: Context) -> str:
     """
-    Filter text to keep only relevant information based on keywords (STM).
+    Filter text to keep only relevant information (STM).
     Use this to remove noise from context.
 
     Args:
         params (FilterContextInput): Validated input parameters containing:
             - content (str): The text to filter
-            - keywords (str): Keywords to keep (comma separated)
-            - keep_context (Optional[int]): Number of surrounding lines to keep
+            - keywords (str): Search terms or natural language description
+            - keep_context (Optional[int]): Surrounding lines to keep
+            - semantic (Optional[bool]): Use LLM for semantic filtering (default: True)
 
     Returns:
-        str: Filtered text showing only lines matching keywords, with
-             optional surrounding context lines
-
-    Examples:
-        - Use when:
-            "Keep only important parts" -> content="[text]", keywords="important,urgent"
-        - Use when: "Filter with context" -> keywords="error", keep_context=2
-        - Don't use when: You need to preserve all information
+        str: Filtered text showing only relevant content
 
     Error Handling:
-        - Returns "[Content filtered out - no matches for: X]" if no keywords found
+        - Returns error message if filter fails
     """
     stm = ctx.request_context.lifespan_context["stm"]
 
     filtered = await stm.filter(
         content=params.content,
-        keywords=params.keywords,
+        criteria=params.keywords,
         keep_context=params.keep_context,
+        semantic=params.semantic,
     )
 
     return filtered
@@ -572,14 +596,6 @@ async def context_stats(params: ContextStatsInput, ctx: Context) -> str:
     Returns:
         str: JSON-formatted statistics including current tokens, max tokens,
              usage percentage, and whether summarization is recommended
-
-    Examples:
-        - Use when: "How much context are we using?"
-        - Use when: "Should I summarize this?"
-        - Use when: Monitoring before adding more content
-
-    Error Handling:
-        - Returns statistics with recommendation if usage is high
     """
     stm = ctx.request_context.lifespan_context["stm"]
 

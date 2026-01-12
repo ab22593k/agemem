@@ -174,7 +174,9 @@ Line 3: urgent deadline
 Line 4: more content
 Line 5: critical alert"""
 
-        filtered = await manager.filter(content, keywords="important,urgent,critical")
+        filtered = await manager.filter(
+            content, criteria="important,urgent,critical", semantic=False
+        )
 
         assert "important information" in filtered
         assert "urgent deadline" in filtered
@@ -193,7 +195,9 @@ Line 4
 Line 5
 Line 6"""
 
-        filtered = await manager.filter(content, keywords="important", keep_context=2)
+        filtered = await manager.filter(
+            content, criteria="important", keep_context=2, semantic=False
+        )
 
         assert "important" in filtered
         assert "Line 1" in filtered or "Line 2" in filtered
@@ -207,7 +211,7 @@ Line 6"""
 Line 2
 Line 3"""
 
-        filtered = await manager.filter(content, keywords="nonexistent")
+        filtered = await manager.filter(content, criteria="nonexistent", semantic=False)
 
         assert "No matches found" in filtered
 
@@ -218,7 +222,7 @@ Line 3"""
 
         content = "Some content"
 
-        filtered = await manager.filter(content, keywords="")
+        filtered = await manager.filter(content, criteria="", semantic=False)
 
         assert filtered == content
 
@@ -236,31 +240,40 @@ Line 3"""
         assert len(summary) > 0
 
     @pytest.mark.asyncio
+    async def test_summary_with_span_int(self):
+        """Test summary with integer span (last N lines)."""
+        manager = STMManager()
+        manager.llm = None  # Force heuristic
+
+        content = "\n".join([f"Line {i}" for i in range(1, 21)])
+        summary = await manager.summary(content, span=5)
+
+        # Heuristic for 5 lines shouldn't omit anything
+        assert "Line 16" in summary
+        assert "Line 20" in summary
+        assert "Line 10" not in summary
+        assert "Line 5" not in summary
+
+    @pytest.mark.asyncio
+    async def test_summary_with_message_list(self):
+        """Test summary with list of messages."""
+        manager = STMManager()
+        manager.llm = None
+
+        content = ["Msg 1", "Msg 2", "Msg 3", "Msg 4", "Msg 5"]
+        summary = await manager.summary(content, span=2)
+
+        assert "Msg 4" in summary
+        assert "Msg 5" in summary
+        assert "Msg 1" not in summary
+
+    @pytest.mark.asyncio
     async def test_summary_without_llm(self):
         """Test summary fallback when LLM is unavailable."""
         manager = STMManager()
         manager.llm = None
 
-        content = """Line 1
-Line 2
-Line 3
-Line 4
-Line 5
-Line 6
-Line 7
-Line 8
-Line 9
-Line 10
-Line 11
-Line 12
-Line 13
-Line 14
-Line 15
-Line 16
-Line 17
-Line 18
-Line 19
-Line 20"""
+        content = "\n".join([f"Line {i}" for i in range(1, 21)])
 
         summary = await manager.summary(content, aggressive=False)
 
@@ -323,10 +336,12 @@ class TestSTMIntegrationScenarios:
         """Test full cycle of context tracking and management."""
         manager = STMManager(max_tokens=100, compression_threshold=0.7)
 
-        long_content = "\n".join([
-            f"Line {i}: This is some text that will be tracked and estimated"
-            for i in range(30)
-        ])
+        long_content = "\n".join(
+            [
+                f"Line {i}: This is some text that will be tracked and estimated"
+                for i in range(30)
+            ]
+        )
         manager.track_context(long_content)
 
         stats = manager.get_stats()
@@ -346,11 +361,12 @@ Important: Another critical point
 Irrelevant: More noise
 Important: Final important point"""
 
-        filtered = await manager.filter(content, keywords="important")
+        filtered = await manager.filter(content, criteria="important", semantic=False)
         assert "noise" not in filtered
 
         summary = await manager.summary(filtered, aggressive=False)
-        assert "critical" in summary or "important" in summary
+        # Heuristic summary for short content won't change much, but we check it runs
+        assert "important" in summary.lower()
 
     def test_multiple_track_updates(self):
         """Test multiple track_context updates."""
