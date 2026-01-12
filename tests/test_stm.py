@@ -49,9 +49,7 @@ class TestSTMManagerBasicOperations:
 Line 2: some other text
 Line 3: urgent deadline"""
 
-        filtered = await stm_manager.filter(
-            content, criteria="important,urgent", semantic=False
-        )
+        filtered = await stm_manager.filter(content, criteria="important,urgent", semantic=False)
 
         assert "important information" in filtered
         assert "urgent deadline" in filtered

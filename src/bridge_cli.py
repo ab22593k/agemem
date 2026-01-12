@@ -38,9 +38,7 @@ async def handle_retrieve(ltm, payload, include_links, memory_func=None):
     print("\n---\n".join(output))
 
 
-async def handle_memorize(
-    ltm, agentic_proc, payload, memory_func=MemoryFunction.FACTUAL
-):
+async def handle_memorize(ltm, agentic_proc, payload, memory_func=MemoryFunction.FACTUAL):
     """Handle the 'memorize' action."""
     if not payload:
         print("Error: content required for memorize", file=sys.stderr)
@@ -90,9 +88,7 @@ async def handle_prune(ltm, agentic_proc, payload):
 async def main():
     """Main entry point for the bridge CLI."""
     if len(sys.argv) < 2:
-        print(
-            "Usage: bridge.py [memorize|retrieve|prune|decay|list|delete] <content> [--links]"
-        )
+        print("Usage: bridge.py [memorize|retrieve|prune|decay|list|delete] <content> [--links]")
         sys.exit(1)
 
     action = sys.argv[1]
@@ -111,9 +107,7 @@ async def main():
     payload = " ".join(payload_parts) if payload_parts else ""
 
     try:
-        async with LTMManager(
-            host=WEAVIATE_HOST, use_vector_search=USE_VECTOR_SEARCH
-        ) as ltm:
+        async with LTMManager(host=WEAVIATE_HOST, use_vector_search=USE_VECTOR_SEARCH) as ltm:
             agentic_proc = AgenticMemoryProcessor()
 
             if action == "memorize":

@@ -26,6 +26,9 @@ wheels/
 .coverage
 htmlcov/
 
+# JS
+**/node_modules/
+
 # Environment
 .env
 .env.local

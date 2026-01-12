@@ -88,9 +88,7 @@ class TestLTMManagerBasicOperations:
         entry = await ltm_manager.add(content=content)
         original_id = entry.id
 
-        updated_entry = await ltm_manager.update(
-            entry_id=original_id, content=updated_content
-        )
+        updated_entry = await ltm_manager.update(entry_id=original_id, content=updated_content)
 
         assert updated_entry.id == original_id
         assert updated_entry.content == updated_content
@@ -141,9 +139,7 @@ class TestLTMManagerBasicOperations:
     @pytest.mark.asyncio
     async def test_merge_memories(self, ltm_manager):
         """Test merging redundant memories."""
-        entry1 = await ltm_manager.add(
-            content="Fact: The user likes apples.", keywords=["apples"]
-        )
+        entry1 = await ltm_manager.add(content="Fact: The user likes apples.", keywords=["apples"])
         entry2 = await ltm_manager.add(
             content="The user really enjoys apples.", keywords=["preference"]
         )

@@ -198,9 +198,7 @@ class LTMManager:
     ) -> MemoryEntry:
         """Create a new memory entry."""
         if len(content) > self.MAX_CONTENT_LENGTH:
-            raise ValueError(
-                f"Content exceeds maximum length of {self.MAX_CONTENT_LENGTH} bytes"
-            )
+            raise ValueError(f"Content exceeds maximum length of {self.MAX_CONTENT_LENGTH} bytes")
 
         if quality <= 0:
             quality = self.DEFAULT_QUALITY
@@ -266,9 +264,7 @@ class LTMManager:
     ) -> MemoryEntry:
         """Update an existing memory entry by its original ID."""
         if len(content) > self.MAX_CONTENT_LENGTH:
-            raise ValueError(
-                f"Content exceeds maximum length of {self.MAX_CONTENT_LENGTH} bytes"
-            )
+            raise ValueError(f"Content exceeds maximum length of {self.MAX_CONTENT_LENGTH} bytes")
 
         weaviate_uuid = await self._find_weaviate_uuid(entry_id)
         if not weaviate_uuid:
@@ -293,9 +289,7 @@ class LTMManager:
             properties=update_props,
         )
 
-        return MemoryEntry(
-            id=entry_id, content=content, metadata=metadata or {}, updated_at=now
-        )
+        return MemoryEntry(id=entry_id, content=content, metadata=metadata or {}, updated_at=now)
 
     async def delete(self, entry_id: str) -> None:
         """Remove a memory entry by its original ID."""
@@ -319,9 +313,7 @@ class LTMManager:
         """Build Weaviate filters from parameters."""
         filter_parts = []
         if memory_function:
-            filter_parts.append(
-                Filter.by_property("memory_type").equal(memory_function.value)
-            )
+            filter_parts.append(Filter.by_property("memory_type").equal(memory_function.value))
 
         if metadata_filter:
             # Note: Filtering on JSON-encoded metadata string is limited in Weaviate
@@ -370,12 +362,8 @@ class LTMManager:
                 "last_traversed": datetime.now(timezone.utc).isoformat(),
             }
         else:
-            link_meta[target_id]["weight"] = round(
-                link_meta[target_id].get("weight", 1.0) + 0.1, 2
-            )
-            link_meta[target_id]["last_traversed"] = datetime.now(
-                timezone.utc
-            ).isoformat()
+            link_meta[target_id]["weight"] = round(link_meta[target_id].get("weight", 1.0) + 0.1, 2)
+            link_meta[target_id]["last_traversed"] = datetime.now(timezone.utc).isoformat()
 
         weaviate_uuid = await self._find_weaviate_uuid(source_id)
         if weaviate_uuid:
@@ -408,9 +396,7 @@ class LTMManager:
             return entries
 
         existing_ids = {e.id for e in entries}
-        ids_to_fetch = [
-            lid for lid in set(linked_ids_to_fetch) if lid not in existing_ids
-        ]
+        ids_to_fetch = [lid for lid in set(linked_ids_to_fetch) if lid not in existing_ids]
         if ids_to_fetch:
             linked_memories = await self.get_by_ids(ids_to_fetch)
             entries.extend(linked_memories)
@@ -462,9 +448,7 @@ class LTMManager:
 
         entries = self._parse_results(results.objects)
 
-        entries = await self._handle_linked_memories(
-            entries, include_links, link_threshold
-        )
+        entries = await self._handle_linked_memories(entries, include_links, link_threshold)
 
         if update_usage and entries:
             await self._increment_usage(entries)
@@ -608,19 +592,20 @@ class LTMManager:
         for rid in redundant_ids:
             await self.delete(rid)
 
+    # ruff: noqa: E741
     async def _redirect_links(self, survivor_id: str, redundant_ids: List[str]) -> None:
         """Redirect links from redundant IDs to survivor ID."""
         coll = self._get_collection()
-        all_objects = coll.query.fetch_objects(limit=1000)  # Simple scan for now
-        for obj in all_objects.objects:
+        # Find objects that link to any of the redundant IDs
+        results = coll.query.fetch_objects(
+            filters=Filter.by_property("links").contains_any(redundant_ids), limit=1000
+        )
+        for obj in results.objects:
             links = cast(List[str], obj.properties.get("links") or [])
-            if any(rid in links for rid in redundant_ids):
-                new_links = [survivor_id if (l in redundant_ids) else l for l in links]
-                # Unique-ify
-                new_links = list(set(new_links))
-                await self.update_links(
-                    str(obj.properties.get("original_id")), new_links
-                )
+            new_links = [survivor_id if (l in redundant_ids) else l for l in links]
+            # Unique-ify
+            new_links = list(set(new_links))
+            await self.update_links(str(obj.properties.get("original_id")), new_links)
 
     def _parse_results(self, objects: List[Any]) -> List[MemoryEntry]:
         """Convert Weaviate response to MemoryEntry list."""
@@ -658,9 +643,7 @@ class LTMManager:
                 content=str(props.get("content") or ""),
                 metadata=metadata,
                 memory_function=mem_func,
-                quality=float(
-                    props.get("quality") if props.get("quality") is not None else 0.5
-                ),
+                quality=float(props.get("quality") if props.get("quality") is not None else 0.5),
                 keywords=cast(List[str], props.get("keywords") or []),
                 tags=cast(List[str], props.get("tags") or []),
                 context_description=str(props.get("context_description"))
@@ -672,14 +655,10 @@ class LTMManager:
                 else None,
                 link_metadata=link_metadata,
                 usage_count=int(
-                    props.get("usage_count")
-                    if props.get("usage_count") is not None
-                    else 0
+                    props.get("usage_count") if props.get("usage_count") is not None else 0
                 ),
-                created_at=cast(datetime, props.get("created_at"))
-                or datetime.now(timezone.utc),
-                updated_at=cast(datetime, props.get("updated_at"))
-                or datetime.now(timezone.utc),
+                created_at=cast(datetime, props.get("created_at")) or datetime.now(timezone.utc),
+                updated_at=cast(datetime, props.get("updated_at")) or datetime.now(timezone.utc),
                 last_used_at=cast(datetime, props.get("last_used_at")),
             )
             entries.append(entry)

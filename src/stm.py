@@ -64,9 +64,7 @@ class STMManager:
 
     def get_stats(self) -> Dict[str, Any]:
         """Return current context statistics."""
-        usage_percent = (
-            (self.current_tokens / self.max_tokens) * 100 if self.max_tokens else 0
-        )
+        usage_percent = (self.current_tokens / self.max_tokens) * 100 if self.max_tokens else 0
         return {
             "current_tokens": self.current_tokens,
             "max_tokens": self.max_tokens,
@@ -191,9 +189,7 @@ class STMManager:
                 f"{self._keyword_filter(content, criteria, keep_context)}"
             )
 
-    def _keyword_filter(
-        self, content: str, keywords: str, keep_context: int = 0
-    ) -> str:
+    def _keyword_filter(self, content: str, keywords: str, keep_context: int = 0) -> str:
         """Fallback keyword-based filtering."""
         kw_list = [k.strip().lower() for k in keywords.split(",") if k.strip()]
         if not kw_list:
@@ -253,7 +249,5 @@ class STMManager:
         tail = lines[-limit // 2 :]
         omitted_count = len(lines) - limit
         return (
-            "\n".join(head)
-            + f"\n\n... [{omitted_count} lines omitted] ...\n\n"
-            + "\n".join(tail)
+            "\n".join(head) + f"\n\n... [{omitted_count} lines omitted] ...\n\n" + "\n".join(tail)
         )

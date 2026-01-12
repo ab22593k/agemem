@@ -58,9 +58,7 @@ mcp = FastMCP("agemem_mcp", lifespan=app_lifespan)
 class AddMemoryInput(BaseModel):
     """Input model for adding a new memory to LTM."""
 
-    model_config = ConfigDict(
-        str_strip_whitespace=True, validate_assignment=True, extra="forbid"
-    )
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
 
     content: str = Field(
         ...,
@@ -91,9 +89,7 @@ class AddMemoryInput(BaseModel):
 class UpdateMemoryInput(BaseModel):
     """Input model for updating an existing memory."""
 
-    model_config = ConfigDict(
-        str_strip_whitespace=True, validate_assignment=True, extra="forbid"
-    )
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
 
     memory_id: str = Field(
         ...,
@@ -114,9 +110,7 @@ class UpdateMemoryInput(BaseModel):
 class DeleteMemoryInput(BaseModel):
     """Input model for deleting a memory."""
 
-    model_config = ConfigDict(
-        str_strip_whitespace=True, validate_assignment=True, extra="forbid"
-    )
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
 
     memory_id: str = Field(
         ...,
@@ -131,9 +125,7 @@ class DeleteMemoryInput(BaseModel):
 class RetrieveMemoryInput(BaseModel):
     """Input model for retrieving memories from LTM."""
 
-    model_config = ConfigDict(
-        str_strip_whitespace=True, validate_assignment=True, extra="forbid"
-    )
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
 
     query: str = Field(
         ...,
@@ -165,8 +157,7 @@ class RetrieveMemoryInput(BaseModel):
     )
     min_similarity: Optional[float] = Field(
         default=None,
-        description="Minimum similarity score for vector search (0-1)."
-        "Higher is more strict.",
+        description="Minimum similarity score for vector search (0-1).Higher is more strict.",
         ge=0,
         le=1,
     )
@@ -179,9 +170,7 @@ class RetrieveMemoryInput(BaseModel):
 class RateMemoryInput(BaseModel):
     """Input model for rating a memory."""
 
-    model_config = ConfigDict(
-        str_strip_whitespace=True, validate_assignment=True, extra="forbid"
-    )
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
 
     memory_id: str = Field(
         ..., description="The ID of memory to rate (from retrieve_memory output)"
@@ -192,9 +181,7 @@ class RateMemoryInput(BaseModel):
 class SummarizeContextInput(BaseModel):
     """Input model for summarizing context."""
 
-    model_config = ConfigDict(
-        str_strip_whitespace=True, validate_assignment=True, extra="forbid"
-    )
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
 
     content: str = Field(..., description="The text to summarize", min_length=1)
     aggressive: Optional[bool] = Field(
@@ -211,9 +198,7 @@ class SummarizeContextInput(BaseModel):
 class FilterContextInput(BaseModel):
     """Input model for filtering context."""
 
-    model_config = ConfigDict(
-        str_strip_whitespace=True, validate_assignment=True, extra="forbid"
-    )
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
 
     content: str = Field(..., description="The text to filter", min_length=1)
     criteria: str = Field(
@@ -226,9 +211,7 @@ class FilterContextInput(BaseModel):
     )
     keep_context: Optional[int] = Field(
         default=0,
-        description=(
-            "Number of surrounding lines to keep (only for keyword filter, default 0)"
-        ),
+        description=("Number of surrounding lines to keep (only for keyword filter, default 0)"),
         ge=0,
         le=10,
     )
@@ -244,9 +227,7 @@ class FilterContextInput(BaseModel):
 class ContextStatsInput(BaseModel):
     """Input model for getting context stats."""
 
-    model_config = ConfigDict(
-        str_strip_whitespace=True, validate_assignment=True, extra="forbid"
-    )
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
 
     current_context: Optional[str] = Field(
         default=None, description="Optional: provide current context to analyze"
@@ -296,9 +277,7 @@ async def add_memory(params: AddMemoryInput, ctx: Context) -> str:
         if params.agentic and agentic_proc.llm:
             await agentic_proc.orchestrate_lifecycle(ltm, entry, params.content)
 
-        res = (
-            f"Memory added successfully. ID: {entry.id} (Quality: {entry.quality:.2f})"
-        )
+        res = f"Memory added successfully. ID: {entry.id} (Quality: {entry.quality:.2f})"
         if entry.keywords:
             res += f"\nKeywords: {', '.join(entry.keywords)}"
         if entry.tags:
@@ -391,9 +370,7 @@ async def rate_memory(params: RateMemoryInput, ctx: Context) -> str:
 class PruneMemoryInput(BaseModel):
     """Input model for pruning memories."""
 
-    model_config = ConfigDict(
-        str_strip_whitespace=True, validate_assignment=True, extra="forbid"
-    )
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
 
     query: Optional[str] = Field(
         default=None,
@@ -456,9 +433,7 @@ async def prune_memories(params: PruneMemoryInput, ctx: Context) -> str:
 class DecayLinksInput(BaseModel):
     """Input model for decaying links."""
 
-    model_config = ConfigDict(
-        str_strip_whitespace=True, validate_assignment=True, extra="forbid"
-    )
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
 
     decay_factor: Optional[float] = Field(
         default=0.9, description="Factor to multiply weights by (0-1).", ge=0, le=1
@@ -580,18 +555,13 @@ async def summarize_context(params: SummarizeContextInput, ctx: Context) -> str:
     """
     stm = ctx.request_context.lifespan_context["stm"]
 
-    summary = await stm.summary(
-        params.content, aggressive=params.aggressive, span=params.span
-    )
+    summary = await stm.summary(params.content, aggressive=params.aggressive, span=params.span)
 
     original_tokens = stm.estimate_tokens(params.content)
     new_tokens = stm.estimate_tokens(summary)
     savings = original_tokens - new_tokens
 
-    return (
-        f"{summary}\n\n[Compression: {original_tokens} -> "
-        f"{new_tokens} tokens, saved {savings}]"
-    )
+    return f"{summary}\n\n[Compression: {original_tokens} -> {new_tokens} tokens, saved {savings}]"
 
 
 @mcp.tool(
@@ -643,10 +613,7 @@ async def context_stats(params: ContextStatsInput, ctx: Context) -> str:
     result = json.dumps(stats, indent=2)
 
     if stats["should_summarize"]:
-        msg = (
-            "\n\n⚠️ RECOMMENDATION: Usage is high. "
-            "Use summarize_context or filter_context."
-        )
+        msg = "\n\n⚠️ RECOMMENDATION: Usage is high. Use summarize_context or filter_context."
         result += msg
 
     return result
