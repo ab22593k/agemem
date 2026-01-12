@@ -111,25 +111,29 @@ class STMManager:
             return self._heuristic_summary(processed_content, aggressive)
 
         prompt_text = (
-            "Summarize the following text, preserving key facts and actionable items."
+            "Your goal is to compress the given conversation span into a concise "
+            "summary that preserves all important information, intentions, "
+            "decisions, and unresolved questions."
         )
         if aggressive:
             prompt_text = (
                 "Aggressively compress the following text. Keep only the most "
-                "critical facts. Remove all fluff."
+                "critical facts and unresolved questions. Remove all redundancy."
             )
 
-        prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
+        prompt = ChatPromptTemplate.from_messages(
+            [
                 (
-                    "You are an expert context compressor for LLM agents as "
-                    "described in the Agentic Memory paper. Goal: reduce "
-                    "redundancy and preserve salient context."
+                    "system",
+                    (
+                        "You are a conversation summarization assistant. The summary "
+                        "will later be used to replace the original conversation in "
+                        "the context, so make sure nothing essential is lost."
+                    ),
                 ),
-            ),
-            ("human", f"{prompt_text}\n\nTEXT:\n{{text}}"),
-        ])
+                ("human", f"{prompt_text}\n\nTEXT:\n{{text}}"),
+            ]
+        )
 
         chain = prompt | self.llm
 
@@ -157,22 +161,24 @@ class STMManager:
         if not semantic or not self.llm:
             return self._keyword_filter(content, criteria, keep_context)
 
-        prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
+        prompt = ChatPromptTemplate.from_messages(
+            [
                 (
-                    "You are an expert context filter for LLM agents. Your "
-                    "goal is to filter out irrelevant or redundant segments "
-                    "while keeping everything related to the criteria."
+                    "system",
+                    (
+                        "You are an expert context filter for LLM agents. Your "
+                        "goal is to filter out irrelevant or redundant segments "
+                        "while keeping everything related to the criteria."
+                    ),
                 ),
-            ),
-            (
-                "human",
-                "FILTER CRITERIA: {criteria}\n\nCONTENT:\n{content}\n\n"
-                "Output ONLY the filtered content that is relevant. Do "
-                "not add explanations.",
-            ),
-        ])
+                (
+                    "human",
+                    "FILTER CRITERIA: {criteria}\n\nCONTENT:\n{content}\n\n"
+                    "Output ONLY the filtered content that is relevant. Do "
+                    "not add explanations.",
+                ),
+            ]
+        )
 
         chain = prompt | self.llm
 

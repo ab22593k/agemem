@@ -13,7 +13,7 @@ from datetime import datetime
 
 import pytest
 
-from ltm import LTMManager
+from src.ltm import LTMManager
 
 
 @pytest.fixture

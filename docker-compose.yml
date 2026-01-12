@@ -1,9 +1,23 @@
 services:
+  agemem:
+    image: alpine:latest
+    command: tail -f /dev/null
+    develop:
+      watch:
+        - action: sync
+          path: .
+          target: /app
+          ignore:
+            - .venv/
+            - __pycache__/
+
   weaviate:
     image: semitechnologies/weaviate:1.36.0-dev-6133a13.amd64
     ports:
       - "8080:8080"
       - "50051:50051"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
     environment:
       QUERY_DEFAULTS_LIMIT: 25
       AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
@@ -11,3 +25,6 @@ services:
       DEFAULT_VECTORIZER_MODULE: 'none'
       ENABLE_MODULES: ''
       CLUSTER_HOSTNAME: 'node1'
+
+volumes:
+  weaviate_data:

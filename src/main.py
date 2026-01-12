@@ -9,14 +9,14 @@ management for LLM agents, implementing Agentic Memory framework.
 import json
 import os
 from contextlib import asynccontextmanager
-from typing import Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
-from ltm import LTMManager
-from stm import STMManager
+from src.ltm import LTMManager
+from src.stm import STMManager
 
 # Configuration
 WEAVIATE_HOST = os.getenv("WEAVIATE_HOST", "localhost:8080")
@@ -63,28 +63,16 @@ class AddMemoryInput(BaseModel):
         min_length=1,
         max_length=100000,
     )
-    tags: Optional[str] = Field(
+    metadata: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Comma-separated tags (e.g., 'user-preferences,project-details')",
+        description="Optional metadata tags to categorize and filter the memory.",
     )
-    session_id: Optional[str] = Field(
-        default=None, description="Optional session identifier for scoping"
-    )
-    user_id: Optional[str] = Field(
-        default=None, description="Optional user identifier for scoping"
+    memory_type: Optional[str] = Field(
+        default=None, description="The type of memory being stored."
     )
     quality: Optional[float] = Field(
         default=0.5, description="Initial quality score 0-1 (default 0.5)", ge=0, le=1
     )
-
-    @field_validator("tags")
-    @classmethod
-    def parse_tags(cls, v: Optional[str]) -> list:
-        """Parse comma-separated tags string into a list."""
-        if v is None:
-            return []
-        tags = [t.strip() for t in v.split(",") if t.strip()]
-        return tags
 
 
 class UpdateMemoryInput(BaseModel):
@@ -94,11 +82,19 @@ class UpdateMemoryInput(BaseModel):
         str_strip_whitespace=True, validate_assignment=True, extra="forbid"
     )
 
-    id: str = Field(
-        ..., description="The ID of memory to update (from retrieve_memory output)"
+    memory_id: str = Field(
+        ...,
+        description="The unique identifier of the memory to update."
+        "Must be obtained from a previous memory retrieval operation.",
     )
     content: str = Field(
-        ..., description="The new content", min_length=1, max_length=100000
+        ...,
+        description="The new content to replace the existing memory content.",
+        min_length=1,
+        max_length=100000,
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None, description="Updated metadata for the memory."
     )
 
 
@@ -109,8 +105,13 @@ class DeleteMemoryInput(BaseModel):
         str_strip_whitespace=True, validate_assignment=True, extra="forbid"
     )
 
-    id: str = Field(
-        ..., description="The ID of memory to delete (from retrieve_memory output)"
+    memory_id: str = Field(
+        ...,
+        description="The unique identifier of the memory to delete."
+        "Must be obtained from a previous memory retrieval operation.",
+    )
+    confirmation: bool = Field(
+        ..., description="Confirmation that this memory should be permanently deleted."
     )
 
 
@@ -121,15 +122,23 @@ class RetrieveMemoryInput(BaseModel):
         str_strip_whitespace=True, validate_assignment=True, extra="forbid"
     )
 
-    query: str = Field(..., description="The search query", min_length=1)
-    limit: Optional[int] = Field(
-        default=5,
-        description="Maximum number of results (default 5, max 20)",
+    query: str = Field(
+        ...,
+        description="The search query to find relevant memories."
+        "Should describe what kind of information or context is needed.",
+        min_length=1,
+    )
+    top_k: Optional[int] = Field(
+        default=3,
+        description="The maximum number of memories to retrieve. Defaults to 3.",
         ge=1,
         le=20,
     )
-    session_id: Optional[str] = Field(default=None, description="Filter by session ID")
-    user_id: Optional[str] = Field(default=None, description="Filter by user ID")
+    metadata_filter: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional metadata filters to narrow down memory search"
+        "(e.g., {'type': 'user_info', 'domain': 'math'}).",
+    )
     min_quality: Optional[float] = Field(
         default=0, description="Minimum quality score to include (0-1)", ge=0, le=1
     )
@@ -154,7 +163,7 @@ class RateMemoryInput(BaseModel):
         str_strip_whitespace=True, validate_assignment=True, extra="forbid"
     )
 
-    id: str = Field(
+    memory_id: str = Field(
         ..., description="The ID of memory to rate (from retrieve_memory output)"
     )
     quality: float = Field(..., description="New quality score (0-1)", ge=0, le=1)
@@ -173,7 +182,9 @@ class SummarizeContextInput(BaseModel):
     )
     span: Optional[Union[str, int]] = Field(
         default=None,
-        description="Span to summarize. 'all' or number of last lines/messages.",
+        description="The range of conversation rounds to summarize."
+        "Can be 'all' for entire context, or a number (e.g., '5')"
+        "for the last N rounds.",
     )
 
 
@@ -185,11 +196,12 @@ class FilterContextInput(BaseModel):
     )
 
     content: str = Field(..., description="The text to filter", min_length=1)
-    keywords: str = Field(
+    criteria: str = Field(
         ...,
         description=(
-            "Keywords to keep (for keyword filter) or natural language "
-            "description of what to keep (for semantic filter)."
+            "The criteria for content removal. Can be keywords, phrases, or "
+            "descriptions of content types to remove"
+            "(e.g., 'the birthday of John', 'the age of Mary')."
         ),
     )
     keep_context: Optional[int] = Field(
@@ -238,34 +250,23 @@ class ContextStatsInput(BaseModel):
 )
 async def add_memory(params: AddMemoryInput, ctx: Context) -> str:
     """
-    Add new knowledge to Long-Term Memory (LTM). Use this when user provides
-    important information that should be remembered for future sessions.
+    Adds new information to external memory store for future reference.
+    Use this when user provides important information that should be remembered.
 
     Args:
-        params (AddMemoryInput): Validated input parameters containing:
-            - content (str): The content to store in memory
-            - tags (Optional[str]): Comma-separated tags for categorization
-            - session_id (Optional[str]): Optional session identifier for scoping
-            - user_id (Optional[str]): Optional user identifier for scoping
-            - quality (Optional[float]): Initial quality score 0-1 (default 0.5)
+        params (AddMemoryInput): Validated input parameters.
 
     Returns:
         str: Confirmation message with memory ID and quality score
-
-    Error Handling:
-        - Returns "Error: Failed to add memory" if storage fails
-        - Validates content length (max 100KB)
-        - Validates quality range (0-1)
     """
     ltm = ctx.request_context.lifespan_context["ltm"]
 
     try:
         entry = await ltm.add(
             content=params.content,
-            tags=params.tags,
-            session_id=params.session_id,
-            user_id=params.user_id,
-            quality=params.quality,
+            metadata=params.metadata,
+            memory_type=params.memory_type,
+            quality=params.quality or 0.5,
         )
         return (
             f"Memory added successfully. ID: {entry.id} (Quality: {entry.quality:.2f})"
@@ -286,28 +287,25 @@ async def add_memory(params: AddMemoryInput, ctx: Context) -> str:
 )
 async def update_memory(params: UpdateMemoryInput, ctx: Context) -> str:
     """
-    Update an existing memory entry. Use this to refine or correct information in LTM.
+    Updates existing memory. Requires memory_id from prior retrieval.
+    Use this to refine or correct information in LTM.
 
     Args:
-        params (UpdateMemoryInput): Validated input parameters containing:
-            - id (str): The ID of memory to update (from retrieve_memory output)
-            - content (str): The new content
+        params (UpdateMemoryInput): Validated input parameters.
 
     Returns:
         str: Confirmation message with updated memory ID
-
-    Error Handling:
-        - Returns "Error: Memory not found" if ID is invalid
-        - Returns "Error: Failed to update memory" if update fails
     """
     ltm = ctx.request_context.lifespan_context["ltm"]
 
     try:
-        await ltm.update(entry_id=params.id, content=params.content)
-        return f"Memory {params.id} updated."
+        await ltm.update(
+            entry_id=params.memory_id, content=params.content, metadata=params.metadata
+        )
+        return f"Memory {params.memory_id} updated."
     except Exception as e:  # pylint: disable=broad-exception-caught
         if "not found" in str(e).lower():
-            return f"Error: Memory not found: {params.id}"
+            return f"Error: Memory not found: {params.memory_id}"
         return f"Error: Failed to update memory: {type(e).__name__}"
 
 
@@ -323,89 +321,27 @@ async def update_memory(params: UpdateMemoryInput, ctx: Context) -> str:
 )
 async def delete_memory(params: DeleteMemoryInput, ctx: Context) -> str:
     """
-    Delete memory entry from LTM. Use this to remove obsolete or incorrect information.
+    Removes memory from store. Requires confirmation.
+    Use this to remove obsolete or incorrect information.
 
     Args:
-        params (DeleteMemoryInput): Validated input parameters containing:
-            - id (str): The ID of memory to delete (from retrieve_memory output)
+        params (DeleteMemoryInput): Validated input parameters.
 
     Returns:
-        str: Confirmation message with deleted memory ID
-
-    Error Handling:
-        - Returns "Error: Memory not found" if ID is invalid
-        - Returns "Error: Failed to delete memory" if deletion fails
+        str: Confirmation message
     """
+    if not params.confirmation:
+        return "Error: Deletion not confirmed."
+
     ltm = ctx.request_context.lifespan_context["ltm"]
 
     try:
-        await ltm.delete(entry_id=params.id)
-        return f"Memory {params.id} deleted."
+        await ltm.delete(entry_id=params.memory_id)
+        return f"Memory {params.memory_id} deleted."
     except Exception as e:  # pylint: disable=broad-exception-caught
         if "not found" in str(e).lower():
-            return f"Error: Memory not found: {params.id}"
+            return f"Error: Memory not found: {params.memory_id}"
         return f"Error: Failed to delete memory: {type(e).__name__}"
-
-
-@mcp.tool(
-    name="retrieve_memory",
-    annotations=ToolAnnotations(
-        title="Retrieve Relevant Memories",
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=True,
-    ),
-)
-async def retrieve_memory(params: RetrieveMemoryInput, ctx: Context) -> str:
-    """
-    Retrieve relevant memories from LTM based on a query.
-    Use this to recall past information.
-
-    Args:
-        params (RetrieveMemoryInput): Validated input parameters containing:
-            - query (str): The search query
-            - limit (Optional[int]): Maximum number of results (default 5, max 20)
-            - session_id (Optional[str]): Filter by session ID
-            - user_id (Optional[str]): Filter by user ID
-            - min_quality (Optional[float]): Minimum quality score to include (0-1)
-            - search_type (Optional[str]): 'vector' or 'keyword'
-            - min_similarity (Optional[float]): Min similarity for vector search
-
-    Returns:
-        str: Formatted list of matching memories
-
-    Error Handling:
-        - Returns "No relevant memories found" if no matches
-        - Returns "Error: Retrieval failed" if search fails
-    """
-    ltm = ctx.request_context.lifespan_context["ltm"]
-
-    try:
-        results = await ltm.retrieve(
-            query=params.query,
-            limit=params.limit,
-            session_id=params.session_id,
-            user_id=params.user_id,
-            min_quality=params.min_quality,
-            update_usage=True,
-            search_type=params.search_type,
-            min_similarity=params.min_similarity,
-        )
-
-        if not results:
-            return "No relevant memories found."
-
-        lines = [f"Found {len(results)} memories:"]
-        for r in results:
-            line = f"- [{r.id}] (Q:{r.quality:.2f}, Used:{r.usage_count}) {r.content}"
-            if r.tags:
-                line += f" [Tags: {', '.join(r.tags)}]"
-            lines.append(line)
-
-        return "\n".join(lines)
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        return f"Error: Retrieval failed: {type(e).__name__}"
 
 
 @mcp.tool(
@@ -424,30 +360,16 @@ async def rate_memory(params: RateMemoryInput, ctx: Context) -> str:
     Higher quality memories are prioritized in retrieval.
 
     Args:
-        params (RateMemoryInput): Validated input parameters containing:
-            - id (str): The ID of memory to rate (from retrieve_memory output)
-            - quality (float): New quality score (0-1)
-
-    Returns:
-        str: Confirmation message with updated quality score
-
-    Examples:
-        - Use when: "This memory is very important" -> id="abc123", quality=0.95
-        - Use when: "This memory isn't useful" -> id="def456", quality=0.2
-        - Don't use when: You need to change content (use update_memory instead)
-
-    Error Handling:
-        - Returns "Error: Memory not found" if ID is invalid
-        - Returns "Error: Failed to rate memory" if rating fails
+        params (RateMemoryInput): Validated input parameters.
     """
     ltm = ctx.request_context.lifespan_context["ltm"]
 
     try:
-        await ltm.update_quality(entry_id=params.id, quality=params.quality)
-        return f"Memory {params.id} quality updated to {params.quality:.2f}"
+        await ltm.update_quality(entry_id=params.memory_id, quality=params.quality)
+        return f"Memory {params.memory_id} quality updated to {params.quality:.2f}"
     except Exception as e:  # pylint: disable=broad-exception-caught
         if "not found" in str(e).lower():
-            return f"Error: Memory not found: {params.id}"
+            return f"Error: Memory not found: {params.memory_id}"
         return f"Error: Failed to rate memory: {type(e).__name__}"
 
 
@@ -464,18 +386,6 @@ async def rate_memory(params: RateMemoryInput, ctx: Context) -> str:
 async def memory_stats(ctx: Context) -> str:
     """
     Get statistics about long-term memory store.
-
-    Returns:
-        str: JSON-formatted statistics including total memories, average quality,
-             and total retrieval count
-
-    Examples:
-        - Use when: "How many memories do we have stored?"
-        - Use when: "What's average quality of our memories?"
-        - Use when: Monitoring memory health and usage
-
-    Error Handling:
-        - Returns "Error: Failed to get stats" if retrieval fails
     """
     ltm = ctx.request_context.lifespan_context["ltm"]
 
@@ -492,6 +402,55 @@ async def memory_stats(ctx: Context) -> str:
 
 
 @mcp.tool(
+    name="retrieve_memory",
+    annotations=ToolAnnotations(
+        title="Retrieve Relevant Memories",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ),
+)
+async def retrieve_memory(params: RetrieveMemoryInput, ctx: Context) -> str:
+    """
+    Retrieves relevant memories and adds them to current context.
+    Use this to recall past information from LTM.
+
+    Args:
+        params (RetrieveMemoryInput): Validated input parameters.
+
+    Returns:
+        str: Formatted list of matching memories
+    """
+    ltm = ctx.request_context.lifespan_context["ltm"]
+
+    try:
+        results = await ltm.retrieve(
+            query=params.query,
+            top_k=params.top_k or 3,
+            metadata_filter=params.metadata_filter,
+            min_quality=params.min_quality or 0,
+            update_usage=True,
+            search_type=params.search_type,
+            min_similarity=params.min_similarity,
+        )
+
+        if not results:
+            return "No relevant memories found."
+
+        lines = [f"Found {len(results)} memories:"]
+        for r in results:
+            line = f"- [{r.id}] (Q:{r.quality:.2f}, Used:{r.usage_count}) {r.content}"
+            if r.metadata:
+                line += f" [Metadata: {json.dumps(r.metadata)}]"
+            lines.append(line)
+
+        return "\n".join(lines)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        return f"Error: Retrieval failed: {type(e).__name__}"
+
+
+@mcp.tool(
     name="summarize_context",
     annotations=ToolAnnotations(
         title="Summarize Context Text",
@@ -503,20 +462,11 @@ async def memory_stats(ctx: Context) -> str:
 )
 async def summarize_context(params: SummarizeContextInput, ctx: Context) -> str:
     """
-    Summarize a block of text or context (STM). Use this to compress information
-    and save context window space.
+    Summarizes conversation rounds to reduce tokens while preserving key information.
+    Use this to compress information and save context window space.
 
     Args:
-        params (SummarizeContextInput): Validated input parameters containing:
-            - content (str): The text to summarize
-            - aggressive (Optional[bool]): If true, use more aggressive compression
-            - span (Optional[str|int]): 'all' or number of last lines/messages
-
-    Returns:
-        str: Summarized text with compression statistics (original tokens → new tokens)
-
-    Error Handling:
-        - Returns summarized text with compression statistics
+        params (SummarizeContextInput): Validated input parameters.
     """
     stm = ctx.request_context.lifespan_context["stm"]
 
@@ -546,27 +496,17 @@ async def summarize_context(params: SummarizeContextInput, ctx: Context) -> str:
 )
 async def filter_context(params: FilterContextInput, ctx: Context) -> str:
     """
-    Filter text to keep only relevant information (STM).
-    Use this to remove noise from context.
+    Filters out irrelevant or outdated content from the conversation context
+    to improve task-solving efficiency.
 
     Args:
-        params (FilterContextInput): Validated input parameters containing:
-            - content (str): The text to filter
-            - keywords (str): Search terms or natural language description
-            - keep_context (Optional[int]): Surrounding lines to keep
-            - semantic (Optional[bool]): Use LLM for semantic filtering (default: True)
-
-    Returns:
-        str: Filtered text showing only relevant content
-
-    Error Handling:
-        - Returns error message if filter fails
+        params (FilterContextInput): Validated input parameters.
     """
     stm = ctx.request_context.lifespan_context["stm"]
 
     filtered = await stm.filter(
         content=params.content,
-        criteria=params.keywords,
+        criteria=params.criteria,
         keep_context=params.keep_context,
         semantic=params.semantic,
     )
@@ -588,14 +528,6 @@ async def context_stats(params: ContextStatsInput, ctx: Context) -> str:
     """
     Get current context window usage statistics. Use this to decide when to
     summarize or filter.
-
-    Args:
-        params (ContextStatsInput): Validated input parameters containing:
-            - current_context (Optional[str]): Optional: current context to analyze
-
-    Returns:
-        str: JSON-formatted statistics including current tokens, max tokens,
-             usage percentage, and whether summarization is recommended
     """
     stm = ctx.request_context.lifespan_context["stm"]
 

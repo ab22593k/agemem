@@ -6,6 +6,7 @@ and semantic search capabilities.
 """
 
 import asyncio
+import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -29,9 +30,8 @@ class MemoryEntry:  # pylint: disable=too-many-instance-attributes
 
     id: str  # pylint: disable=invalid-name
     content: str
-    tags: List[str] = field(default_factory=list)
-    session_id: Optional[str] = None
-    user_id: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    memory_type: Optional[str] = None
     quality: float = 0.5
     usage_count: int = 0
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -83,19 +83,16 @@ class LTMManager:
 
         properties = [
             Property(name="content", data_type=DataType.TEXT),
-            Property(name="tags", data_type=DataType.TEXT_ARRAY),
+            Property(name="metadata", data_type=DataType.TEXT),
+            Property(
+                name="memory_type",
+                data_type=DataType.TEXT,
+                tokenization=Tokenization.FIELD,
+            ),
             Property(
                 name="original_id",
                 data_type=DataType.TEXT,
                 tokenization=Tokenization.FIELD,
-            ),
-            Property(
-                name="session_id",
-                data_type=DataType.TEXT,
-                tokenization=Tokenization.FIELD,
-            ),
-            Property(
-                name="user_id", data_type=DataType.TEXT, tokenization=Tokenization.FIELD
             ),
             Property(name="quality", data_type=DataType.NUMBER),
             Property(name="usage_count", data_type=DataType.INT),
@@ -138,9 +135,8 @@ class LTMManager:
     async def add(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         content: str,
-        tags: List[str],
-        session_id: Optional[str] = None,
-        user_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        memory_type: Optional[str] = None,
         quality: float = 0.5,
     ) -> MemoryEntry:
         """Create a new memory entry."""
@@ -156,14 +152,14 @@ class LTMManager:
 
         entry_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc)
+        metadata = metadata or {}
 
         coll.data.insert(
             properties={
                 "content": content,
-                "tags": tags,
+                "metadata": json.dumps(metadata),
+                "memory_type": memory_type,
                 "original_id": entry_id,
-                "session_id": session_id,
-                "user_id": user_id,
                 "quality": float(quality),
                 "usage_count": 0,
                 "created_at": now,
@@ -178,9 +174,8 @@ class LTMManager:
         return MemoryEntry(
             id=entry_id,
             content=content,
-            tags=tags,
-            session_id=session_id,
-            user_id=user_id,
+            metadata=metadata,
+            memory_type=memory_type,
             quality=quality,
             usage_count=0,
             created_at=now,
@@ -188,7 +183,12 @@ class LTMManager:
             last_used_at=now,
         )
 
-    async def update(self, entry_id: str, content: str) -> MemoryEntry:
+    async def update(
+        self,
+        entry_id: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> MemoryEntry:
         """Update an existing memory entry by its original ID."""
         if len(content) > self.MAX_CONTENT_LENGTH:
             raise ValueError(
@@ -206,15 +206,21 @@ class LTMManager:
         coll = self._get_collection()
         now = datetime.now(timezone.utc)
 
+        update_props: Dict[str, Any] = {
+            "content": content,
+            "updated_at": now,
+        }
+        if metadata:
+            update_props["metadata"] = json.dumps(metadata)
+
         coll.data.update(
             uuid=weaviate_uuid,
-            properties={
-                "content": content,
-                "updated_at": now,
-            },
+            properties=update_props,
         )
 
-        return MemoryEntry(id=entry_id, content=content, updated_at=now)
+        return MemoryEntry(
+            id=entry_id, content=content, metadata=metadata or {}, updated_at=now
+        )
 
     async def delete(self, entry_id: str) -> None:
         """Remove a memory entry by its original ID."""
@@ -231,16 +237,14 @@ class LTMManager:
 
     def _build_filters(
         self,
-        session_id: Optional[str] = None,
-        user_id: Optional[str] = None,
+        metadata_filter: Optional[Dict[str, Any]] = None,
         min_quality: float = 0,
     ) -> Any:
         """Build Weaviate filters from parameters."""
         filter_parts = []
-        if session_id:
-            filter_parts.append(Filter.by_property("session_id").equal(session_id))
-        if user_id:
-            filter_parts.append(Filter.by_property("user_id").equal(user_id))
+        if metadata_filter:
+            for key, value in metadata_filter.items():
+                filter_parts.append(Filter.by_property(f"metadata.{key}").equal(value))
         if min_quality > 0:
             filter_parts.append(Filter.by_property("quality").greater_than(min_quality))
 
@@ -256,9 +260,8 @@ class LTMManager:
         self,
         query: str,
         *,
-        limit: int = 5,
-        session_id: Optional[str] = None,
-        user_id: Optional[str] = None,
+        top_k: int = 3,
+        metadata_filter: Optional[Dict[str, Any]] = None,
         min_quality: float = 0,
         update_usage: bool = False,
         search_type: Optional[Literal["vector", "keyword"]] = None,
@@ -269,19 +272,18 @@ class LTMManager:
 
         Args:
             query: Search string.
-            limit: Max results.
-            session_id: Filter by session.
-            user_id: Filter by user.
+            top_k: Max results.
+            metadata_filter: Filter by metadata.
             min_quality: Filter by quality score.
             update_usage: If true, increments usage count.
             search_type: "vector" (semantic) or "keyword" (BM25).
                         Defaults to "vector" if use_vector_search=True.
             min_similarity: Min similarity score for vector search (0-1).
         """
-        limit = min(limit, 20)
+        top_k = min(top_k, 20)
         coll = self._get_collection()
 
-        filters = self._build_filters(session_id, user_id, min_quality)
+        filters = self._build_filters(metadata_filter, min_quality)
 
         # Determine search type
         effective_search_type = search_type
@@ -291,14 +293,14 @@ class LTMManager:
         if effective_search_type == "vector" and self.use_vector_search and query:
             results = coll.query.near_text(
                 query=query,
-                limit=limit,
+                limit=top_k,
                 filters=filters,
                 distance=1.0 - min_similarity if min_similarity is not None else None,
             )
         elif query:
-            results = coll.query.bm25(query=query, limit=limit, filters=filters)
+            results = coll.query.bm25(query=query, limit=top_k, filters=filters)
         else:
-            results = coll.query.fetch_objects(limit=limit, filters=filters)
+            results = coll.query.fetch_objects(limit=top_k, filters=filters)
 
         entries = self._parse_results(results.objects)
 
@@ -375,15 +377,22 @@ class LTMManager:
 
         for obj in objects:
             props = obj.properties
+            meta_val = props.get("metadata")
+            metadata = {}
+            if isinstance(meta_val, str):
+                try:
+                    metadata = json.loads(meta_val)
+                except json.JSONDecodeError:
+                    pass
+            elif isinstance(meta_val, dict):
+                metadata = meta_val
+
             entry = MemoryEntry(
                 id=str(props.get("original_id") or ""),
                 content=str(props.get("content") or ""),
-                tags=list(cast(List, props.get("tags") or [])),
-                session_id=str(props.get("session_id"))
-                if props.get("session_id") is not None
-                else None,
-                user_id=str(props.get("user_id"))
-                if props.get("user_id") is not None
+                metadata=metadata,
+                memory_type=str(props.get("memory_type"))
+                if props.get("memory_type") is not None
                 else None,
                 quality=float(
                     props.get("quality") if props.get("quality") is not None else 0.5

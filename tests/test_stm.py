@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from stm import ContextStats, STMManager
+from src.stm import ContextStats, STMManager
 
 
 class TestSTMManagerBasicOperations:
