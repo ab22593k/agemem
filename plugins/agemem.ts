@@ -40,59 +40,91 @@ export const AgememPlugin = async (ctx) => {
       const messageCount = input.messages.length;
       
       try {
-        // 1. Semantic search for the current message
-        let queries = [runAgemem(["retrieve", lastMessage])];
+        // Parallel queries to different memory "departments"
+        const queries = [
+          // 1. Experiential: How have we handled similar intents/tasks before?
+          runAgemem(["retrieve", lastMessage, "--experiential", "--links"]),
+          // 2. Factual: Who is the user and what are their confirmed traits?
+          runAgemem(["retrieve", lastMessage, "--factual", "--links"])
+        ];
 
-        // 2. If session is new, also pull "General Profile/Facts"
+        // 3. New Session Bootstrapping: Pull Core Identity explicitly
         if (messageCount <= 2) {
-          queries.push(runAgemem(["retrieve", "What are the core facts and identity details about the user?"]));
+          queries.push(runAgemem(["retrieve", "User core identity, preferences, and active projects", "--factual", "--links"]));
         }
 
-        const results = await Promise.all(queries);
-        const combinedMemories = results
-          .filter(r => r && r.trim().length > 0)
-          .join("\n---\n");
+        const [expResults, factResults, identityResults] = await Promise.all(queries);
+        
+        let cognitiveContext = "";
+        
+        if (factResults || identityResults) {
+          cognitiveContext += "\n[FACTUAL ANCHORS - WHO THE USER IS]\n" + (factResults || identityResults);
+        }
+        
+        if (expResults) {
+          cognitiveContext += "\n[EXPERIENTIAL TRACES - HOW WE WORK]\n" + expResults;
+        }
 
-        if (combinedMemories) {
+        if (cognitiveContext.trim()) {
           output.instructions = (output.instructions || "") + 
-            "\n--- AGEMEM LONG-TERM CONTEXT ---\n" +
-            "The following facts have been retrieved from your long-term memory. " +
-            "Prioritize these facts for personalization and continuity.\n\n" +
-            combinedMemories + "\n" +
-            "--- END AGEMEM CONTEXT ---\n";
+            "\n--- COGNITIVE GOVERNANCE (LTM retrieved) ---\n" +
+            "Adhere to the following retrieved facts and past experiences to ensure continuity. " +
+            "If current instructions contradict these anchors, clarify with the user.\n" +
+            cognitiveContext + "\n" +
+            "--- END COGNITIVE CONTEXT ---\n";
         }
       } catch (err) { console.error("[Agemem] Retrieval Error:", err); }
     },
 
+
     /**
-     * Learning: Proactively save the interaction to build cross-session memory.
+     * Learning: Proactively save the interaction and refine the network.
+     * Uses Significance Filtering: Only saves turns that add meaningful value.
      */
     "agent.think.after": async (input, output) => {
       const lastUserMsg = input.messages[input.messages.length - 1];
       const agentResponse = output.content;
-      if (!agentResponse) return;
+      if (!agentResponse || agentResponse.length < 50) return; // Ignore trivial responses
 
-      // Create a factual record of the turn
-      const timestamp = new Date().toISOString();
-      const memoryFragment = `[Session Turn ${timestamp}]\nUSER: ${lastUserMsg?.content}\nAGENT: ${agentResponse}`;
+      // Basic significance check: does it look like a decision, a fact, or a workflow?
+      const significanceRegex = /decide|confirm|always|never|fact|note|project|update|remember/i;
+      const isSignificant = significanceRegex.test(agentResponse) || significanceRegex.test(lastUserMsg?.content || "");
+      
+      if (!isSignificant && input.messages.length > 4) {
+        // Not significant and not a session start - skip noisy memorization
+        return;
+      }
+
+      const memoryFragment = `[Turn] USER: ${lastUserMsg?.content}\nAGENT: ${agentResponse}`;
+      const memoryFunc = isSignificant ? "--factual" : "--experiential";
       
       try { 
-        await runAgemem(["memorize", memoryFragment]); 
+        await runAgemem(["memorize", memoryFragment, memoryFunc]); 
       } catch (err) { console.error("[Agemem] Save Error:", err); }
     },
 
     /**
      * Safe Archiving: Compaction Hook
-     * Only save if the conversation is long enough to avoid spamming the database.
+     * Performs deep maintenance: Pruning and Temporal Decay.
      */
     "agent.compaction.before": async (input) => {
       const { messages } = input;
       if (!messages || messages.length < 5) return;
+      
       const content = messages.map((m) => `[${m.role.toUpperCase()}]: ${m.content}`).join("\n---\n");
       try { 
-        await runAgemem(["memorize", `ARCHIVED CHUNK:\n${content}`]); 
-      } catch (err) {}
+        // 1. Archive the block as EXPERIENTIAL (historical trajectory)
+        const archiveResult = await runAgemem(["memorize", `ARCHIVED SESSION CHUNK:\n${content}`, "--experiential"]);
+        const survivorId = archiveResult.match(/Success: ([a-f0-9]+)/)?.[1];
+
+        // 2. Perform deep pruning
+        await runAgemem(["prune", "ARCHIVED SESSION CHUNK"]);
+
+        // 3. Apply temporal decay
+        await runAgemem(["decay", "0.98"]); // Slower decay for more stable associations
+      } catch (err) { console.error("[Agemem] Compaction Maintenance Error:", err); }
     },
+
 
     /**
      * Search Tool for the agent

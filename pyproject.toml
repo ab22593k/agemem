@@ -3,7 +3,6 @@ name = "agemem"
 version = "0.1.0"
 description = "Agentic Memory (AgeMem) MCP Server"
 requires-python = ">=3.13"
-authors = [{ name = "Abdelwahab" }]
 dependencies = [
     "mcp[cli]",
     "weaviate-client>=4.10.0",
@@ -26,7 +25,11 @@ where = ["src"]
 include = ["*"]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::UserWarning",
 ]
+
+[tool.ruff.lint]
+ignore = ["E501"]

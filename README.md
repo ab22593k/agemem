@@ -1,6 +1,6 @@
 # Agentic Memory (AgeMem) MCP Server
 
-An implementation of **Agentic Memory** framework for LLM agents, based on paper *"Agentic Memory: Learning Unified Long-Term and Short-Term Memory Management for Large Language Model Agents"*.
+An implementation of **Agentic Memory** framework for LLM agents, aligned with the taxonomy and principles from *"Memory in the Age of AI Agents: A Survey" (Hu et al., 2025)* and *"Agentic Memory" (2024)*.
 
 ## Architecture
 
@@ -8,20 +8,23 @@ An implementation of **Agentic Memory** framework for LLM agents, based on paper
 ┌─────────────────────────────────────────────────────────────┐
 │                     MCP Server (Python)                     │
 ├─────────────────────────────────────────────────────────────┤
-│  LTM Tools          │  STM Tools          │  Monitoring     │
-│  • add_memory       │  • summarize_context│  • memory_stats │
-│  • update_memory    │  • filter_context   │  • context_stats│
-│  • delete_memory    │                     │                 │
-│  • retrieve_memory  │                     │                 │
-│  • rate_memory      │                     │                 │
-└─────────┬───────────┴──────────┬──────────┴─────────────────┘
-          │                      │
-          ▼                      ▼
-┌─────────────────┐    ┌─────────────────┐
-│    Weaviate     │    │    LangChain    │
-│  (Vector Store) │    │  (Context Mgr)  │
-└─────────────────┘    └─────────────────┘
+│  Memory Functions      │  Memory Dynamics    │  Memory Form │
+│  • Factual             │  • Formation (F)    │  • Token (1D)│
+│  • Experiential        │  • Evolution (E)    │  • Planar (2D)│
+│  • Working             │  • Retrieval (R)    │  • Hierarch(3)│
+└─────────┬──────────────┴──────────┬──────────┴───────┬──────┘
+          │                         │                  │
+          ▼                         ▼                  ▼
+   [Functional Roles]        [Lifecycle Ops]    [Storage Unit]
 ```
+
+## Taxonomy Alignment
+
+This project strictly adheres to the **Forms-Functions-Dynamics** taxonomy:
+
+- **Functions**: Distinguished via `MemoryFunction` (FACTUAL, EXPERIENTIAL, WORKING).
+- **Dynamics**: Formalized as `form_memory`, `evolve_memory`, and `retrieve` operators.
+- **Forms**: Supports Token-level memory in Flat (1D), Planar (2D/Graph), and Hierarchical (3D/Parent-child) structures.
 
 ## Tools
 
@@ -29,11 +32,12 @@ An implementation of **Agentic Memory** framework for LLM agents, based on paper
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `add_memory` | Store new knowledge | `content`, `tags`, `session_id`, `user_id`, `quality` |
-| `update_memory` | Update existing entry | `id`, `content` |
-| `delete_memory` | Remove entry | `id` |
-| `retrieve_memory` | Search memories | `query`, `limit`, `session_id`, `user_id`, `min_quality` |
-| `rate_memory` | Adjust quality score | `id`, `quality` (0-1) |
+| `add_memory` | **Formation (F)** & **Evolution (E)** | `content`, `memory_function`, `quality`, `parent_id` |
+| `update_memory` | Manual edit | `id`, `content` |
+| `delete_memory` | Removal | `id` |
+| `retrieve_memory` | **Retrieval (R)** | `query`, `memory_function`, `include_links`, `min_quality` |
+| `rate_memory` | Quality feedback | `id`, `quality` (0-1) |
+| `prune_memories` | **Evolution (E)** (Consolidation) | `query` |
 
 ### Short-Term Memory (STM)
 
@@ -51,11 +55,12 @@ An implementation of **Agentic Memory** framework for LLM agents, based on paper
 
 ## Features
 
-- **Memory Quality Scoring**: Each memory has a 0-1 quality score that can be adjusted
-- **Usage Tracking**: Retrieval counts and timestamps are tracked automatically
-- **Session/User Scoping**: Memories can be scoped to specific sessions or users
-- **Vector Search**: Optional semantic search when Weaviate has vectorizer enabled
-- **Intelligent Context Management**: Uses LangChain (Gemini) for smart summarization and filtering
+- **Functional Taxonomy**: Categorize memories as Factual, Experiential, or Working.
+- **Formation Operator**: Automated extraction of keywords, tags, and context SIGNIFICANCE.
+- **Evolution Dynamics**: Automatic linking and contextual refinement of historical memories.
+- **Hierarchical Form**: Support for parent-child relations (3D memory structures).
+- **Quality Feedback Loop**: Reinforce or decay memory importance based on usage and ratings.
+- **Vector & Keyword Search**: Multi-modal retrieval using Weaviate v4.
 
 ## Quick Start
 

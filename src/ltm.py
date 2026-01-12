@@ -12,6 +12,7 @@ import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, cast
 
 from weaviate import connect_to_local
@@ -25,6 +26,14 @@ from weaviate.collections.classes.config import (
 from weaviate.collections.classes.filters import Filter
 
 
+class MemoryFunction(str, Enum):
+    """Functional taxonomy as per Memory in the Age of AI Agents survey."""
+
+    FACTUAL = "factual"  # Knowledge from interactions with users/environment
+    EXPERIENTIAL = "experiential"  # Problem-solving traces and task execution history
+    WORKING = "working"  # Workspace information during individual tasks
+
+
 @dataclass
 class MemoryEntry:  # pylint: disable=too-many-instance-attributes
     """Represents a single memory stored in LTM."""
@@ -32,8 +41,16 @@ class MemoryEntry:  # pylint: disable=too-many-instance-attributes
     id: str  # pylint: disable=invalid-name
     content: str
     metadata: Dict[str, Any] = field(default_factory=dict)
-    memory_type: Optional[str] = None
+    memory_function: MemoryFunction = MemoryFunction.FACTUAL
     quality: float = 0.5
+    keywords: List[str] = field(default_factory=list)
+    tags: List[str] = field(default_factory=list)
+    context_description: Optional[str] = None
+    links: List[str] = field(default_factory=list)
+    parent_id: Optional[str] = None  # For Hierarchical (3D) memory form
+    link_metadata: Dict[str, Any] = field(
+        default_factory=dict
+    )  # target_id -> {weight, last_traversed}
     usage_count: int = 0
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -83,6 +100,24 @@ class LTMManager:
 
         if self.client.collections.exists(self.CLASS_NAME):
             self.collection = self.client.collections.get(self.CLASS_NAME)
+            # Add missing properties if any (for migration)
+            config = self.collection.config.get()
+            existing_props = set()
+            for p in cast(List[Any], config.properties):
+                existing_props.add(p.name)
+
+            new_props = [
+                Property(name="keywords", data_type=DataType.TEXT_ARRAY),
+                Property(name="tags", data_type=DataType.TEXT_ARRAY),
+                Property(name="context_description", data_type=DataType.TEXT),
+                Property(name="links", data_type=DataType.TEXT_ARRAY),
+                Property(name="link_metadata", data_type=DataType.TEXT),
+                Property(name="parent_id", data_type=DataType.TEXT),
+            ]
+
+            for prop in new_props:
+                if prop.name not in existing_props:
+                    self.collection.config.add_property(prop)
             return
 
         vectorizer_config: Any
@@ -105,6 +140,12 @@ class LTMManager:
                 tokenization=Tokenization.FIELD,
             ),
             Property(name="quality", data_type=DataType.NUMBER),
+            Property(name="keywords", data_type=DataType.TEXT_ARRAY),
+            Property(name="tags", data_type=DataType.TEXT_ARRAY),
+            Property(name="context_description", data_type=DataType.TEXT),
+            Property(name="links", data_type=DataType.TEXT_ARRAY),
+            Property(name="link_metadata", data_type=DataType.TEXT),
+            Property(name="parent_id", data_type=DataType.TEXT),
             Property(name="usage_count", data_type=DataType.INT),
             Property(name="created_at", data_type=DataType.DATE),
             Property(name="updated_at", data_type=DataType.DATE),
@@ -146,8 +187,14 @@ class LTMManager:
         self,
         content: str,
         metadata: Optional[Dict[str, Any]] = None,
-        memory_type: Optional[str] = None,
+        memory_function: MemoryFunction = MemoryFunction.FACTUAL,
         quality: float = 0.5,
+        keywords: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
+        context_description: Optional[str] = None,
+        links: Optional[List[str]] = None,
+        link_metadata: Optional[Dict[str, Any]] = None,
+        parent_id: Optional[str] = None,
     ) -> MemoryEntry:
         """Create a new memory entry."""
         if len(content) > self.MAX_CONTENT_LENGTH:
@@ -164,19 +211,31 @@ class LTMManager:
         now = datetime.now(timezone.utc)
         metadata = metadata or {}
 
-        coll.data.insert(
-            properties={
-                "content": content,
-                "metadata": json.dumps(metadata),
-                "memory_type": memory_type,
-                "original_id": entry_id,
-                "quality": float(quality),
-                "usage_count": 0,
-                "created_at": now,
-                "updated_at": now,
-                "last_used_at": now,
-            }
-        )
+        props = {
+            "content": content,
+            "metadata": json.dumps(metadata),
+            "memory_type": memory_function.value,
+            "original_id": entry_id,
+            "quality": float(quality),
+            "usage_count": 0,
+            "created_at": now,
+            "updated_at": now,
+            "last_used_at": now,
+        }
+        if keywords:
+            props["keywords"] = keywords
+        if tags:
+            props["tags"] = tags
+        if context_description:
+            props["context_description"] = context_description
+        if links:
+            props["links"] = links
+        if link_metadata:
+            props["link_metadata"] = json.dumps(link_metadata)
+        if parent_id:
+            props["parent_id"] = parent_id
+
+        coll.data.insert(properties=props)
 
         # Give Weaviate a moment to index for immediate operations
         await asyncio.sleep(0.5)
@@ -185,8 +244,14 @@ class LTMManager:
             id=entry_id,
             content=content,
             metadata=metadata,
-            memory_type=memory_type,
+            memory_function=memory_function,
             quality=quality,
+            keywords=keywords or [],
+            tags=tags or [],
+            context_description=context_description,
+            links=links or [],
+            link_metadata=link_metadata or {},
+            parent_id=parent_id,
             usage_count=0,
             created_at=now,
             updated_at=now,
@@ -247,14 +312,16 @@ class LTMManager:
 
     def _build_filters(
         self,
-        memory_type: Optional[str] = None,
+        memory_function: Optional[MemoryFunction] = None,
         metadata_filter: Optional[Dict[str, Any]] = None,
         min_quality: float = 0,
     ) -> Any:
         """Build Weaviate filters from parameters."""
         filter_parts = []
-        if memory_type:
-            filter_parts.append(Filter.by_property("memory_type").equal(memory_type))
+        if memory_function:
+            filter_parts.append(
+                Filter.by_property("memory_type").equal(memory_function.value)
+            )
 
         if metadata_filter:
             # Note: Filtering on JSON-encoded metadata string is limited in Weaviate
@@ -277,36 +344,104 @@ class LTMManager:
             filters = filters & part
         return filters
 
-    async def retrieve(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    async def get_by_ids(self, entry_ids: List[str]) -> List[MemoryEntry]:
+        """Fetch multiple memories by their original IDs."""
+        if not entry_ids:
+            return []
+
+        coll = self._get_collection()
+        results = coll.query.fetch_objects(
+            filters=Filter.by_property("original_id").contains_any(entry_ids),
+            limit=len(entry_ids),
+        )
+        return self._parse_results(results.objects)
+
+    async def _update_link_traversal(self, source_id: str, target_id: str) -> None:
+        """Increment link weight and update last_traversed timestamp."""
+        source = await self.get_by_ids([source_id])
+        if not source:
+            return
+
+        link_meta = source[0].link_metadata or {}
+        if target_id not in link_meta:
+            # First traversal, start at 1.1 to show reinforcement from baseline 1.0
+            link_meta[target_id] = {
+                "weight": 1.1,
+                "last_traversed": datetime.now(timezone.utc).isoformat(),
+            }
+        else:
+            link_meta[target_id]["weight"] = round(
+                link_meta[target_id].get("weight", 1.0) + 0.1, 2
+            )
+            link_meta[target_id]["last_traversed"] = datetime.now(
+                timezone.utc
+            ).isoformat()
+
+        weaviate_uuid = await self._find_weaviate_uuid(source_id)
+        if weaviate_uuid:
+            coll = self._get_collection()
+            coll.data.update(
+                uuid=weaviate_uuid, properties={"link_metadata": json.dumps(link_meta)}
+            )
+
+    async def _handle_linked_memories(
+        self, entries: List[MemoryEntry], include_links: bool, link_threshold: float
+    ) -> List[MemoryEntry]:
+        """Fetch linked memories and update weights."""
+        if not include_links or not entries:
+            return entries
+
+        linked_ids_to_fetch = []
+        traversal_updates = []  # (source_id, target_id)
+
+        for entry in entries:
+            if not entry.links:
+                continue
+            for link_id in entry.links:
+                # Check weight threshold
+                meta = entry.link_metadata.get(link_id, {"weight": 1.0})
+                if meta.get("weight", 1.0) >= link_threshold:
+                    linked_ids_to_fetch.append(link_id)
+                    traversal_updates.append((entry.id, link_id))
+
+        if not linked_ids_to_fetch:
+            return entries
+
+        existing_ids = {e.id for e in entries}
+        ids_to_fetch = [
+            lid for lid in set(linked_ids_to_fetch) if lid not in existing_ids
+        ]
+        if ids_to_fetch:
+            linked_memories = await self.get_by_ids(ids_to_fetch)
+            entries.extend(linked_memories)
+
+        # Update weights for followed links
+        for src_id, tgt_id in traversal_updates:
+            await self._update_link_traversal(src_id, tgt_id)
+
+        return entries
+
+    async def retrieve(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         self,
         query: str,
         *,
         top_k: int = 3,
-        memory_type: Optional[str] = None,
+        memory_function: Optional[MemoryFunction] = None,
         metadata_filter: Optional[Dict[str, Any]] = None,
         min_quality: float = 0,
         update_usage: bool = False,
         search_type: Optional[Literal["vector", "keyword"]] = None,
         min_similarity: Optional[float] = None,
+        include_links: bool = False,
+        link_threshold: float = 0.5,
     ) -> List[MemoryEntry]:
         """
-        Search for memories matching query.
-
-        Args:
-            query: Search string.
-            top_k: Max results.
-            memory_type: Filter by memory type.
-            metadata_filter: Filter by metadata.
-            min_quality: Filter by quality score.
-            update_usage: If true, increments usage count.
-            search_type: "vector" (semantic) or "keyword" (BM25).
-                        Defaults to "vector" if use_vector_search=True.
-            min_similarity: Min similarity score for vector search (0-1).
+        Search for memories matching query (Retrieval Operator).
         """
         top_k = min(top_k, 20)
         coll = self._get_collection()
 
-        filters = self._build_filters(memory_type, metadata_filter, min_quality)
+        filters = self._build_filters(memory_function, metadata_filter, min_quality)
 
         # Determine search type
         effective_search_type = search_type
@@ -326,6 +461,10 @@ class LTMManager:
             results = coll.query.fetch_objects(limit=top_k, filters=filters)
 
         entries = self._parse_results(results.objects)
+
+        entries = await self._handle_linked_memories(
+            entries, include_links, link_threshold
+        )
 
         if update_usage and entries:
             await self._increment_usage(entries)
@@ -371,6 +510,247 @@ class LTMManager:
             },
         )
 
+    async def update_links(self, entry_id: str, links: List[str]) -> None:
+        """Update the links for a memory entry."""
+        weaviate_uuid = await self._find_weaviate_uuid(entry_id)
+        if not weaviate_uuid:
+            raise ValueError(f"Memory not found: {entry_id}")
+
+        coll = self._get_collection()
+        coll.data.update(
+            uuid=weaviate_uuid,
+            properties={"links": links},
+        )
+
+    async def update_agentic_fields(
+        self,
+        entry_id: str,
+        keywords: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
+        context_description: Optional[str] = None,
+    ) -> None:
+        """Update agentic enrichment fields."""
+        weaviate_uuid = await self._find_weaviate_uuid(entry_id)
+        if not weaviate_uuid:
+            raise ValueError(f"Memory not found: {entry_id}")
+
+        coll = self._get_collection()
+        props: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
+        if keywords is not None:
+            props["keywords"] = keywords
+        if tags is not None:
+            props["tags"] = tags
+        if context_description is not None:
+            props["context_description"] = context_description
+
+        coll.data.update(
+            uuid=weaviate_uuid,
+            properties=props,
+        )
+
+    async def apply_merge_plan(self, plan: Dict[str, Any]) -> None:
+        """Apply a merge plan generated by AgenticMemoryProcessor."""
+        await self.merge_memories(
+            survivor_id=plan["survivor_id"],
+            redundant_ids=plan["redundant_ids"],
+            new_content=plan["new_content"],
+            new_context=plan["new_context"],
+        )
+
+    async def merge_memories(
+        self,
+        survivor_id: str,
+        redundant_ids: List[str],
+        new_content: str,
+        new_context: str,
+    ) -> None:
+        """
+        Merge multiple redundant memories into a survivor.
+        """
+        if not redundant_ids:
+            return
+
+        survivor = await self.get_by_ids([survivor_id])
+        if not survivor:
+            raise ValueError(f"Survivor memory not found: {survivor_id}")
+
+        redundants = await self.get_by_ids(redundant_ids)
+
+        # 1. Collect all unique links and metadata
+        all_links = set(survivor[0].links)
+        all_keywords = set(survivor[0].keywords)
+        all_tags = set(survivor[0].tags)
+
+        for r_entry in redundants:
+            all_links.update(r_entry.links)
+            all_keywords.update(r_entry.keywords)
+            all_tags.update(r_entry.tags)
+
+        # Remove self and redundant IDs from links
+        all_links.discard(survivor_id)
+        for rid in redundant_ids:
+            all_links.discard(rid)
+
+        # 2. Update survivor
+        await self.update(survivor_id, new_content)
+        await self.update_agentic_fields(
+            survivor_id,
+            keywords=list(all_keywords),
+            tags=list(all_tags),
+            context_description=new_context,
+        )
+        await self.update_links(survivor_id, list(all_links))
+
+        # 3. Update other memories that link to redundant IDs
+        await self._redirect_links(survivor_id, redundant_ids)
+
+        # 4. Delete redundants
+        for rid in redundant_ids:
+            await self.delete(rid)
+
+    async def _redirect_links(self, survivor_id: str, redundant_ids: List[str]) -> None:
+        """Redirect links from redundant IDs to survivor ID."""
+        coll = self._get_collection()
+        all_objects = coll.query.fetch_objects(limit=1000)  # Simple scan for now
+        for obj in all_objects.objects:
+            links = cast(List[str], obj.properties.get("links") or [])
+            if any(rid in links for rid in redundant_ids):
+                new_links = [survivor_id if (l in redundant_ids) else l for l in links]
+                # Unique-ify
+                new_links = list(set(new_links))
+                await self.update_links(
+                    str(obj.properties.get("original_id")), new_links
+                )
+
+    def _parse_results(self, objects: List[Any]) -> List[MemoryEntry]:
+        """Convert Weaviate response to MemoryEntry list."""
+        entries = []
+
+        for obj in objects:
+            props = obj.properties
+            meta_val = props.get("metadata")
+            metadata = {}
+            if isinstance(meta_val, str):
+                try:
+                    metadata = json.loads(meta_val)
+                except json.JSONDecodeError:
+                    pass
+            elif isinstance(meta_val, dict):
+                metadata = meta_val
+
+            link_meta_val = props.get("link_metadata")
+            link_metadata = {}
+            if isinstance(link_meta_val, str):
+                try:
+                    link_metadata = json.loads(link_meta_val)
+                except json.JSONDecodeError:
+                    pass
+
+            # Map legacy or unknown memory types to MemoryFunction
+            raw_mem_type = str(props.get("memory_type"))
+            try:
+                mem_func = MemoryFunction(raw_mem_type)
+            except ValueError:
+                mem_func = MemoryFunction.FACTUAL
+
+            entry = MemoryEntry(
+                id=str(props.get("original_id") or ""),
+                content=str(props.get("content") or ""),
+                metadata=metadata,
+                memory_function=mem_func,
+                quality=float(
+                    props.get("quality") if props.get("quality") is not None else 0.5
+                ),
+                keywords=cast(List[str], props.get("keywords") or []),
+                tags=cast(List[str], props.get("tags") or []),
+                context_description=str(props.get("context_description"))
+                if props.get("context_description") is not None
+                else None,
+                links=cast(List[str], props.get("links") or []),
+                parent_id=str(props.get("parent_id"))
+                if props.get("parent_id") is not None
+                else None,
+                link_metadata=link_metadata,
+                usage_count=int(
+                    props.get("usage_count")
+                    if props.get("usage_count") is not None
+                    else 0
+                ),
+                created_at=cast(datetime, props.get("created_at"))
+                or datetime.now(timezone.utc),
+                updated_at=cast(datetime, props.get("updated_at"))
+                or datetime.now(timezone.utc),
+                last_used_at=cast(datetime, props.get("last_used_at")),
+            )
+            entries.append(entry)
+
+        return entries
+
+    async def decay_links(self, decay_factor: float = 0.9) -> int:
+        """
+        Apply temporal decay to all links.
+        Returns number of links removed.
+        """
+        coll = self._get_collection()
+        all_objects = coll.query.fetch_objects(limit=1000)
+        removed_count = 0
+
+        for obj in all_objects.objects:
+            links = cast(List[str], obj.properties.get("links") or [])
+            if not links:
+                continue
+
+            link_meta_val = obj.properties.get("link_metadata")
+            link_meta = {}
+            if link_meta_val and isinstance(link_meta_val, str):
+                try:
+                    link_meta = json.loads(link_meta_val)
+                except json.JSONDecodeError:
+                    pass
+
+            new_links, new_meta, changed = self._apply_decay_to_obj_links(
+                links, link_meta, decay_factor
+            )
+
+            if changed:
+                removed_count += len(links) - len(new_links)
+                coll.data.update(
+                    uuid=obj.uuid,
+                    properties={
+                        "links": new_links,
+                        "link_metadata": json.dumps(new_meta),
+                    },
+                )
+
+        return removed_count
+
+    def _apply_decay_to_obj_links(
+        self, links: List[str], link_meta: Dict[str, Any], decay_factor: float
+    ) -> tuple[List[str], Dict[str, Any], bool]:
+        """Apply decay to links of a single object."""
+        new_links = []
+        new_meta = {}
+        changed = False
+
+        for lid in links:
+            meta = link_meta.get(lid, {"weight": 1.0})
+            old_weight = meta.get("weight", 1.0)
+            new_weight = old_weight * decay_factor
+
+            if new_weight < 0.1:
+                changed = True
+                continue
+
+            new_links.append(lid)
+            new_meta[lid] = {
+                "weight": round(new_weight, 2),
+                "last_traversed": meta.get("last_traversed"),
+            }
+            if new_weight != old_weight:
+                changed = True
+
+        return new_links, new_meta, changed
+
     async def get_stats(self) -> Dict[str, Any]:
         """Get statistics about memory store."""
         coll = self._get_collection()
@@ -393,44 +773,3 @@ class LTMManager:
             "average_quality": avg_quality,
             "total_retrievals": total_usage,
         }
-
-    def _parse_results(self, objects: List[Any]) -> List[MemoryEntry]:
-        """Convert Weaviate response to MemoryEntry list."""
-        entries = []
-
-        for obj in objects:
-            props = obj.properties
-            meta_val = props.get("metadata")
-            metadata = {}
-            if isinstance(meta_val, str):
-                try:
-                    metadata = json.loads(meta_val)
-                except json.JSONDecodeError:
-                    pass
-            elif isinstance(meta_val, dict):
-                metadata = meta_val
-
-            entry = MemoryEntry(
-                id=str(props.get("original_id") or ""),
-                content=str(props.get("content") or ""),
-                metadata=metadata,
-                memory_type=str(props.get("memory_type"))
-                if props.get("memory_type") is not None
-                else None,
-                quality=float(
-                    props.get("quality") if props.get("quality") is not None else 0.5
-                ),
-                usage_count=int(
-                    props.get("usage_count")
-                    if props.get("usage_count") is not None
-                    else 0
-                ),
-                created_at=cast(datetime, props.get("created_at"))
-                or datetime.now(timezone.utc),
-                updated_at=cast(datetime, props.get("updated_at"))
-                or datetime.now(timezone.utc),
-                last_used_at=cast(datetime, props.get("last_used_at")),
-            )
-            entries.append(entry)
-
-        return entries
