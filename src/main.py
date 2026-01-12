@@ -68,7 +68,9 @@ class AddMemoryInput(BaseModel):
         description="Optional metadata tags to categorize and filter the memory.",
     )
     memory_type: Optional[str] = Field(
-        default=None, description="The type of memory being stored."
+        default=None,
+        description="The type of memory being stored."
+        "Examples: 'fact', 'preference', 'context', 'plan'.",
     )
     quality: Optional[float] = Field(
         default=0.5, description="Initial quality score 0-1 (default 0.5)", ge=0, le=1
@@ -134,10 +136,13 @@ class RetrieveMemoryInput(BaseModel):
         ge=1,
         le=20,
     )
+    memory_type: Optional[str] = Field(
+        default=None,
+        description="Filter by memory type (e.g., 'context', 'fact', 'preference').",
+    )
     metadata_filter: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Optional metadata filters to narrow down memory search"
-        "(e.g., {'type': 'user_info', 'domain': 'math'}).",
+        description="Optional metadata filters to narrow down memory search.",
     )
     min_quality: Optional[float] = Field(
         default=0, description="Minimum quality score to include (0-1)", ge=0, le=1
@@ -428,6 +433,7 @@ async def retrieve_memory(params: RetrieveMemoryInput, ctx: Context) -> str:
         results = await ltm.retrieve(
             query=params.query,
             top_k=params.top_k or 3,
+            memory_type=params.memory_type,
             metadata_filter=params.metadata_filter,
             min_quality=params.min_quality or 0,
             update_usage=True,

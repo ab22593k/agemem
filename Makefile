@@ -11,7 +11,7 @@ test-unit:
 test-integration: weaviate-up
 	@echo "Waiting for Weaviate to be ready..."
 	@sleep 5
-	uv run pytest tests/ltm.py -v
+	uv run pytest tests/test_ltm.py -v
 	docker-compose down
 
 # Run all tests
@@ -19,7 +19,7 @@ test-all: test-unit test-integration
 
 # Run MCP server
 run:
-	uv run python main.py
+	uv run python src/main.py
 
 # Clean build artifacts
 clean:

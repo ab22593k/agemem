@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 export const AgememPlugin = async (ctx) => {
   // Path to the agemem python project
   // This value is automatically updated by setup.sh during installation
-  const agememPath = process.env.AGEMEM_PATH || "/home/abdelwahab/azul/python/agemem";
+  const agememPath = process.env.AGEMEM_PATH || "__AGEMEM_PATH__";
   
   const runAgemem = (args) => {
     return new Promise((resolve, reject) => {
@@ -83,10 +83,11 @@ export const AgememPlugin = async (ctx) => {
 
     /**
      * Safe Archiving: Compaction Hook
+     * Only save if the conversation is long enough to avoid spamming the database.
      */
     "agent.compaction.before": async (input) => {
       const { messages } = input;
-      if (!messages || messages.length === 0) return;
+      if (!messages || messages.length < 5) return;
       const content = messages.map((m) => `[${m.role.toUpperCase()}]: ${m.content}`).join("\n---\n");
       try { 
         await runAgemem(["memorize", `ARCHIVED CHUNK:\n${content}`]); 

@@ -98,11 +98,14 @@ uv run python main.py
 
 ```
 .
-├── main.py                   # MCP Server entry point
-├── ltm_manager.py            # LTM Manager (Weaviate v4)
-├── stm_manager.py            # STM Manager (LangChain)
-├── test_ltm_manager.py      # LTM integration tests
-├── test_stm_manager.py      # STM unit tests
+├── src/
+│   ├── main.py               # MCP Server entry point
+│   ├── ltm.py                # LTM Manager (Weaviate v4)
+│   ├── stm.py                # STM Manager (LangChain)
+│   └── bridge_cli.py         # CLI bridge for compaction
+├── tests/
+│   ├── test_ltm.py           # LTM integration tests
+│   └── test_stm.py           # STM unit tests
 ├── requirements.txt          # Python dependencies
 └── pyproject.toml            # Project metadata
 ```

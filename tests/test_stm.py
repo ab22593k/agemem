@@ -1,7 +1,7 @@
 """Tests for Short-Term Memory Manager.
 
 Tests for context tracking, summarization, and filtering.
-Run with: pytest test_stm_manager.py
+Run with: pytest tests/test_stm.py
 """
 
 # pylint: disable=protected-access,too-many-public-methods,too-few-public-methods

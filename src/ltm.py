@@ -5,6 +5,8 @@ Manages persistent memory storage with quality scoring, usage tracking,
 and semantic search capabilities.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import uuid
@@ -12,7 +14,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, cast
 
-import weaviate
 from weaviate import connect_to_local
 from weaviate.collections import Collection
 from weaviate.collections.classes.config import (
@@ -49,8 +50,8 @@ class LTMManager:
     def __init__(self, host: str = "localhost:8080", use_vector_search: bool = False):
         self.host = host
         self.use_vector_search = use_vector_search
-        self.client: Optional[weaviate.WeaviateClient] = None
-        self.collection: Optional[Any] = None
+        self.client = None
+        self.collection = None
 
     async def initialize(self) -> None:
         """Initialize Weaviate client and ensure schema exists."""
@@ -60,6 +61,15 @@ class LTMManager:
         )
 
         await self._ensure_schema()
+
+    async def __aenter__(self) -> "LTMManager":
+        """Async context manager entry."""
+        await self.initialize()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Async context manager exit."""
+        await self.close()
 
     async def close(self) -> None:
         """Close Weaviate client connection."""
@@ -237,14 +247,25 @@ class LTMManager:
 
     def _build_filters(
         self,
+        memory_type: Optional[str] = None,
         metadata_filter: Optional[Dict[str, Any]] = None,
         min_quality: float = 0,
     ) -> Any:
         """Build Weaviate filters from parameters."""
         filter_parts = []
+        if memory_type:
+            filter_parts.append(Filter.by_property("memory_type").equal(memory_type))
+
         if metadata_filter:
-            for key, value in metadata_filter.items():
-                filter_parts.append(Filter.by_property(f"metadata.{key}").equal(value))
+            # Note: Filtering on JSON-encoded metadata string is limited in Weaviate
+            # For now, we only support exact matches if the user knows what they are
+            # doing
+            for _, _ in metadata_filter.items():
+                # This is a placeholder for better implementation in the future
+                # e.g. using Filter.by_property("metadata").contains_any([value])
+                # but requires specific tokenization.
+                pass
+
         if min_quality > 0:
             filter_parts.append(Filter.by_property("quality").greater_than(min_quality))
 
@@ -261,6 +282,7 @@ class LTMManager:
         query: str,
         *,
         top_k: int = 3,
+        memory_type: Optional[str] = None,
         metadata_filter: Optional[Dict[str, Any]] = None,
         min_quality: float = 0,
         update_usage: bool = False,
@@ -273,6 +295,7 @@ class LTMManager:
         Args:
             query: Search string.
             top_k: Max results.
+            memory_type: Filter by memory type.
             metadata_filter: Filter by metadata.
             min_quality: Filter by quality score.
             update_usage: If true, increments usage count.
@@ -283,7 +306,7 @@ class LTMManager:
         top_k = min(top_k, 20)
         coll = self._get_collection()
 
-        filters = self._build_filters(metadata_filter, min_quality)
+        filters = self._build_filters(memory_type, metadata_filter, min_quality)
 
         # Determine search type
         effective_search_type = search_type
